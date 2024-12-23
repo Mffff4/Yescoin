@@ -227,6 +227,9 @@ class BaseBot:
                         except Exception as e:
                             logger.error(f"{self.session_name} | ❌ Error activating referral code: {e}")
 
+                    await self.process_offline_bonus()
+                    await self.process_signin()
+
                     await self.process_squad()
 
                     profile_data = await self.get_profile_data()
@@ -1027,6 +1030,122 @@ class BaseBot:
 
         except Exception as error:
             logger.error(f"{self.session_name} | ❌ Error processing squad: {error}")
+            await asyncio.sleep(3)
+
+    async def get_offline_bonus_info(self) -> Dict[str, Any]:
+        try:
+            response = await self.make_request(
+                method='GET',
+                url='https://bi.yescoin.gold/game/getOfflineYesPacBonusInfo'
+            )
+            return response['data'] if response else []
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error retrieving offline bonus info: {error}")
+            await asyncio.sleep(3)
+            return []
+
+    async def claim_offline_bonus(self, transaction_id: str, claim_type: int, create_at: int) -> bool:
+        try:
+            response = await self.make_request(
+                method='POST',
+                url='https://bi.yescoin.gold/game/claimOfflineBonus',
+                json={
+                    "id": transaction_id,
+                    "createAt": create_at,
+                    "claimType": claim_type,
+                    "destination": ""
+                }
+            )
+            if response and response.get('code') == 0:
+                bonus_data = response['data']
+                logger.success(
+                    f"{self.session_name} | "
+                    f"✅ Claimed offline bonus | "
+                    f"💰 Amount: {bonus_data['collectAmount']} | "
+                    f"📊 Extra: {bonus_data['extraPercentage']}%"
+                )
+                return True
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error claiming offline bonus: {error}")
+            await asyncio.sleep(3)
+            return False
+
+    async def get_signin_list(self) -> Dict[str, Any]:
+        try:
+            response = await self.make_request(
+                method='GET',
+                url='https://bi.yescoin.gold/signIn/list'
+            )
+            return response['data'] if response else []
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error retrieving signin list: {error}")
+            await asyncio.sleep(3)
+            return []
+
+    async def claim_signin(self, signin_id: str, create_at: int, signin_type: int = 1) -> bool:
+        try:
+            response = await self.make_request(
+                method='POST',
+                url='https://bi.yescoin.gold/signIn/claim',
+                json={
+                    "id": signin_id,
+                    "createAt": create_at,
+                    "signInType": signin_type,
+                    "destination": ""
+                }
+            )
+            if response and response.get('code') == 0:
+                reward_data = response['data']
+                logger.success(
+                    f"{self.session_name} | "
+                    f"✅ Daily check-in completed | "
+                    f"💰 Reward: {reward_data['reward']}"
+                )
+                return True
+            return False
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error claiming signin reward: {error}")
+            await asyncio.sleep(3)
+            return False
+
+    async def process_offline_bonus(self) -> None:
+        try:
+            bonus_info = await self.get_offline_bonus_info()
+            if not bonus_info:
+                return
+
+            for bonus in bonus_info:
+                if bonus['collectStatus']:
+                    create_at = int(time())
+                    await self.claim_offline_bonus(
+                        transaction_id=bonus['transactionId'],
+                        claim_type=bonus['claimType'],
+                        create_at=create_at
+                    )
+                    await asyncio.sleep(2)
+
+        except Exception as error:
+            logger.error(f"{self.session_name} | ❌ Error processing offline bonus: {error}")
+            await asyncio.sleep(3)
+
+    async def process_signin(self) -> None:
+        try:
+            signin_list = await self.get_signin_list()
+            if not signin_list:
+                return
+
+            for signin in signin_list:
+                if signin['status'] == 1 and signin['checkIn'] == 0:
+                    create_at = int(time())
+                    await self.claim_signin(
+                        signin_id=signin['id'],
+                        create_at=create_at
+                    )
+                    break  # Только один чекин в день
+
+        except Exception as error:
+            logger.error(f"{self.session_name} | ❌ Error processing signin: {error}")
             await asyncio.sleep(3)
 
 
