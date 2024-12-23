@@ -304,7 +304,7 @@ class BaseBot:
                     energy_boost_count = boosts_info['coinPoolLeftRecoveryCount']
                     balance = boosts_info.get('currentAmount', 0)
 
-                    if available_energy > 0:
+                    if available_energy > min_energy:
                         if turbo_boost_count > 0 and not active_turbo:
                             logger.info(f"{self.session_name} | 🚀 Activating turbo boost...")
                             if await self.apply_turbo_boost():
