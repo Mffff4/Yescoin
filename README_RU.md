@@ -102,12 +102,7 @@
 | **MAX_ENERGY_LEVEL**      | 10                   | Максимальный уровень энергии                              |
 | **MAX_CHARGE_LEVEL**      | 10                   | Максимальный уровень заряда                                |
 
-    RANDOM_TAPS_COUNT: List[int] = [35, 100]
-    MIN_AVAILABLE_ENERGY: int = 10
 
-    MAX_TAP_LEVEL: int = 10
-    MAX_ENERGY_LEVEL: int = 10
-    MAX_CHARGE_LEVEL: int = 10
 ---
 
 ## 💰 Поддержка и донаты
