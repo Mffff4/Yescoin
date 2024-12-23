@@ -1,0 +1,48 @@
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+          
+      - name: Set up Git
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          
+      - name: Check if tag is on dev branch
+        run: |
+          CURRENT_BRANCH=$(git branch -r --contains ${{ github.ref }})
+          if [[ $CURRENT_BRANCH != *"dev"* ]]; then
+            echo "Tag must be created on dev branch"
+            exit 1
+          fi
+          
+      - name: Merge dev into main
+        run: |
+          git checkout main
+          git pull origin main
+          git merge --no-ff origin/dev -m "Release ${{ github.ref_name }}"
+          git push origin main
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
