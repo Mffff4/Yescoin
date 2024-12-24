@@ -14,6 +14,7 @@ import os
 from bot.utils.universal_telegram_client import UniversalTelegramClient
 from bot.utils.proxy_utils import check_proxy, get_working_proxy
 from bot.utils.first_run import check_is_first_run, append_recurring_session
+from bot.utils.wallet_utils import create_and_save_wallet, get_wallet_data
 from bot.config import settings
 from bot.utils import logger, config_utils, CONFIG_PATH
 from bot.exceptions import InvalidSession
@@ -229,7 +230,6 @@ class BaseBot:
 
                     await self.process_offline_bonus()
                     await self.process_signin()
-
                     await self.process_squad()
 
                     profile_data = await self.get_profile_data()
@@ -260,8 +260,11 @@ class BaseBot:
                                 f"ℹ️ TGE status: {'✅' if join_status == 1 else '❌'} | "
                                 f"📅 Days in game: {days_in_game}"
                             )
+                            if join_status == 1:
+                                await self.process_wallet_binding()
 
                     try:
+                        await self.process_upgrade_tasks()
                         await self.process_tasks()
                         await self.process_daily_missions()
                     except Exception as e:
@@ -373,12 +376,25 @@ class BaseBot:
                             next_tap_level = boosts_info['singleCoinLevel'] + 1
                             next_energy_level = boosts_info['coinPoolTotalLevel'] + 1
                             next_charge_level = boosts_info['coinPoolRecoveryLevel'] + 1
+                            next_yespac_level = boosts_info['yesPacLevel'] + 1
 
                             next_tap_price = boosts_info['singleCoinUpgradeCost']
                             next_energy_price = boosts_info['coinPoolTotalUpgradeCost']
                             next_charge_price = boosts_info['coinPoolRecoveryUpgradeCost']
+                            next_yespac_price = boosts_info['yesPacUpgradeCost']
 
                             upgraded = False
+
+                            if balance >= next_yespac_price and next_yespac_level <= settings.MAX_YESPAC_LEVEL:
+                                logger.info(
+                                    f"{self.session_name} | "
+                                    f"🔄 Upgrading YESPAC to level {next_yespac_level} | "
+                                    f"Price: {next_yespac_price} | "
+                                    f"Max: {settings.MAX_YESPAC_LEVEL}"
+                                )
+                                if await self.level_up(boost_id=4):
+                                    logger.success(f"{self.session_name} | ✅ YESPAC upgraded to level {next_yespac_level}")
+                                    upgraded = True
 
                             if balance >= next_tap_price and next_tap_level <= settings.MAX_TAP_LEVEL:
                                 logger.info(
@@ -777,6 +793,9 @@ class BaseBot:
             if not task_list:
                 return
 
+            daily_tasks_completed = 0
+            daily_tasks_total = 0
+
             for task in task_list.get('taskList', []):
                 task_id = task['taskId']
                 task_name = task['taskName']
@@ -800,6 +819,7 @@ class BaseBot:
                                     f"Task {task_name} completed | "
                                     f"Received: {reward_data.get('bonusAmount', 0)}"
                                 )
+                                daily_tasks_completed += 1
 
             for task in task_list.get('specialTaskList', []):
                 task_id = task['taskId']
@@ -808,11 +828,6 @@ class BaseBot:
                 task_status = task['taskStatus']
 
                 if task_status == 0:
-                    logger.info(
-                        f"{self.session_name} | "
-                        f"Executing special task: {task_name} | "
-                        f"Reward: {task_bonus}"
-                    )
 
                     if await self.click_task(task_id):
                         await asyncio.sleep(5)
@@ -821,17 +836,22 @@ class BaseBot:
                             if reward_data:
                                 logger.success(
                                     f"{self.session_name} | "
-                                    f"Special task {task_name} completed | "
-                                    f"Received: {reward_data.get('bonusAmount', 0)}"
+                                    f"✅ Special task {task_name} completed | "
+                                    f"💰 Received: {reward_data.get('bonusAmount', 0)}"
                                 )
 
             bonus_info = await self.get_task_bonus_info()
             if bonus_info:
+                daily_tasks_completed = bonus_info.get('dailyTaskFinishCount', 0)
+                daily_tasks_total = bonus_info.get('dailyTaskTotalCount', 0)
                 logger.info(
                     f"{self.session_name} | "
-                    f"Daily tasks: {bonus_info.get('dailyTaskFinishCount', 0)}/{bonus_info.get('dailyTaskTotalCount', 0)} | "
+                    f"Daily tasks: {daily_tasks_completed}/{daily_tasks_total} | "
                     f"Regular tasks: {bonus_info.get('commonTaskFinishCount', 0)}/{bonus_info.get('commonTaskTotalCount', 0)}"
                 )
+
+                if daily_tasks_completed == daily_tasks_total:
+                    await self.claim_daily_bonus(1)
 
         except Exception as error:
             logger.error(f"{self.session_name} | Error processing tasks: {error}")
@@ -924,11 +944,6 @@ class BaseBot:
                 mission_reward = mission['reward']
 
                 if mission_status == 0:
-                    logger.info(
-                        f"{self.session_name} | "
-                        f"🎯 Mission: {mission_name} | "
-                        f"💰 Reward: {mission_reward}"
-                    )
                     try:
                         if await self.process_daily_mission(mission_id):
                             completed += 1
@@ -1111,22 +1126,49 @@ class BaseBot:
 
     async def process_offline_bonus(self) -> None:
         try:
+            boosts_info = await self.get_boosts_info()
+            if not boosts_info or boosts_info.get('swipeBotLevel', 0) < 2:
+                return
+
             bonus_info = await self.get_offline_bonus_info()
             if not bonus_info:
+                return
+
+            wallets = await self.get_wallet_info()
+            if not wallets:
+                return
+            
+            wallet_address = wallets[0].get('friendlyAddress', '')
+            if not wallet_address:
                 return
 
             for bonus in bonus_info:
                 if bonus['collectStatus']:
                     create_at = int(time())
-                    await self.claim_offline_bonus(
-                        transaction_id=bonus['transactionId'],
-                        claim_type=bonus['claimType'],
-                        create_at=create_at
+                    bonus_data = {
+                        "id": bonus['transactionId'],
+                        "createAt": create_at,
+                        "claimType": bonus['claimType'],
+                        "destination": wallet_address
+                    }
+
+                    response = await self.make_request(
+                        method='POST',
+                        url='https://bi.yescoin.gold/game/claimOfflineBonus',
+                        json=bonus_data
                     )
-                    await asyncio.sleep(2)
+
+                    if response and response.get('code') == 0:
+                        logger.success(
+                            f"{self.session_name} | "
+                            f"✅ Offline bonus claimed | "
+                            f"💰 Amount: {bonus['collectAmount']} | "
+                            f"📈 Extra: {bonus['extraPercentage']}%"
+                        )
+                    await asyncio.sleep(1)
 
         except Exception as error:
-            logger.error(f"{self.session_name} | ❌ Error processing offline bonus: {error}")
+            logger.error(f"{self.session_name} | Error processing offline bonus: {error}")
             await asyncio.sleep(3)
 
     async def process_signin(self) -> None:
@@ -1142,11 +1184,164 @@ class BaseBot:
                         signin_id=signin['id'],
                         create_at=create_at
                     )
-                    break  # Только один чекин в день
+                    break
 
         except Exception as error:
             logger.error(f"{self.session_name} | ❌ Error processing signin: {error}")
             await asyncio.sleep(3)
+
+    async def get_wallet_info(self) -> Dict[str, Any]:
+        try:
+            response = await self.make_request(
+                method='GET',
+                url='https://bi.yescoin.gold/wallet/getWallet'
+            )
+            return response['data'] if response else []
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error getting wallet info: {error}")
+            await asyncio.sleep(3)
+            return []
+
+    async def bind_wallet(self, wallet_data: Dict[str, Any]) -> bool:
+        try:
+            required_fields = ["public_key", "wallet_address", "raw_address"]
+            for field in required_fields:
+                if field not in wallet_data:
+                    logger.error(f"{self.session_name} | Missing required field: {field}")
+                    return False
+            
+            bind_data = {
+                "walletType": 1,
+                "publicKey": wallet_data["public_key"],
+                "friendlyAddress": wallet_data["wallet_address"],
+                "rawAddress": wallet_data["raw_address"]
+            }
+            
+            response = await self.make_request(
+                method='POST',
+                url='https://bi.yescoin.gold/wallet/bind',
+                json=bind_data
+            )
+            
+            if response and response.get('code') == 0:
+                logger.success(f"{self.session_name} | ✅ Wallet connected successfully")
+                return True
+                
+            error_msg = response.get('message', 'Unknown error') if response else 'No server response'
+            logger.error(f"{self.session_name} | ❌ Wallet connection error: {error_msg}")
+            return False
+            
+        except Exception as error:
+            logger.error(f"{self.session_name} | ❌ Wallet connection error: {error}")
+            await asyncio.sleep(3)
+            return False
+
+    async def process_wallet_binding(self) -> None:
+        try:
+            if not settings.AUTO_BIND_WALLET:
+                return
+
+            wallets = await self.get_wallet_info()
+            if wallets:
+                logger.info(f"{self.session_name} | Wallet already connected")
+                return
+
+            logger.info(f"{self.session_name} | Preparing wallet connection...")
+            await asyncio.sleep(randint(1, 3))
+
+            wallet_data = get_wallet_data(CONFIG_PATH, self.session_name)
+            if not wallet_data:
+                wallet_data = create_and_save_wallet(CONFIG_PATH, self.session_name)
+
+            if not wallet_data:
+                logger.error(f"{self.session_name} | Failed to create/get wallet data")
+                return
+
+            await self.bind_wallet(wallet_data)
+
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error in wallet connection process: {error}")
+            await asyncio.sleep(3)
+
+    async def get_upgrade_tasks(self) -> Dict[str, Any]:
+        try:
+            response = await self.make_request(
+                method='GET',
+                url='https://bi.yescoin.gold/task/getUserUpgradeTaskList'
+            )
+            return response['data'] if response else {}
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error getting upgrade tasks: {error}")
+            await asyncio.sleep(3)
+            return {}
+
+    async def claim_upgrade_reward(self, task_id: str) -> bool:
+        try:
+            response = await self.make_request(
+                method='POST',
+                url='https://bi.yescoin.gold/task/finishUserUpgradeTask',
+                json=str(task_id)
+            )
+            
+            if response and response.get('code') == 0:
+                bonus_amount = response['data'].get('bonusAmount', 0)
+                return True
+                
+            error_msg = response.get('message', 'Unknown error') if response else 'No server response'
+            logger.error(f"{self.session_name} | ❌ Level up reward error: {error_msg}")
+            return False
+            
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error claiming level up reward: {error}")
+            await asyncio.sleep(3)
+            return False
+
+    async def process_upgrade_tasks(self) -> None:
+        try:
+            upgrade_data = await self.get_upgrade_tasks()
+            if not upgrade_data:
+                return
+
+            tasks = upgrade_data.get('taskBonusBaseResponseList', [])
+            user_level = upgrade_data.get('userLevel', 0)
+
+            for task in tasks:
+                task_id = task['taskId']
+                task_status = task['taskStatus']
+                task_level = task['taskUserLevel']
+                bonus_amount = task['taskBonusAmount']
+
+                if task_status == 0 and task_level <= user_level:
+                    if await self.claim_upgrade_reward(task_id):
+                        logger.success(
+                            f"{self.session_name} | "
+                            f"✅ Level {task_level} reward claimed | "
+                            f"💰 Amount: {bonus_amount}"
+                        )
+                    await asyncio.sleep(1)
+
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error processing upgrade tasks: {error}")
+            await asyncio.sleep(3)
+
+    async def claim_daily_bonus(self, bonus_type: int) -> bool:
+        try:
+            response = await self.make_request(
+                method='POST',
+                url='https://bi.yescoin.gold/task/claimBonus',
+                json=bonus_type
+            )
+            
+            if response and response.get('code') == 0:
+                bonus_amount = response['data'].get('bonusAmount', 0)
+                logger.success(f"{self.session_name} | ✅ Daily tasks bonus claimed: {bonus_amount}")
+                return True
+            return False
+            
+        except Exception as error:
+            logger.error(f"{self.session_name} | Error claiming daily tasks bonus: {error}")
+            await asyncio.sleep(3)
+            return False
 
 
 async def run_tapper(tg_client: UniversalTelegramClient):

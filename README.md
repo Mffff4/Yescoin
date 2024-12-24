@@ -109,6 +109,8 @@
 | **MAX_TAP_LEVEL**         | 10                   | Maximum tap level                                             |
 | **MAX_ENERGY_LEVEL**      | 10                   | Maximum energy level                                          |
 | **MAX_CHARGE_LEVEL**      | 10                   | Maximum charge level                                          |
+| **MAX_YESPAC_LEVEL**      | 2                    | Maximum Yespac level                                          |
+| **AUTO_BIND_WALLET**      | False                | Automatic wallet binding for drops                           |
 
 
 

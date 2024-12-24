@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     MAX_TAP_LEVEL: int = 10
     MAX_ENERGY_LEVEL: int = 10
     MAX_CHARGE_LEVEL: int = 10
+    MAX_YESPAC_LEVEL: int = 2
+
+    AUTO_BIND_WALLET: bool = False
 
     @property
     def blacklisted_sessions(self) -> List[str]:
