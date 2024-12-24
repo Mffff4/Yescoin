@@ -4,7 +4,8 @@ first_run.txt
 accounts_config.json
 proxies.txt
 lock_files/
-
+wallet_config.json
+t.txt
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
